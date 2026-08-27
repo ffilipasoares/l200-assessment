@@ -1,0 +1,9 @@
+langchain-google-genai
+langgraph
+langchain-community
+streamlit
+pandas
+python-dotenv
+pytest
+ruff
+langsmith

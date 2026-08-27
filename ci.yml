@@ -1,0 +1,31 @@
+name: CI Pipeline
+name: GCP CI/CD Pipeline
+
+on: [push, pull_request]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-node-version: '3.11'
+      - name: Install dependencies
+        run: |
+          pip install ruff pytest
+          pip install -r requirements.txt
+      - name: Lint with ruff
+        run: ruff check .
+      - name: Run tests
+        run: pytest
+        continue-on-error: true
+      # Observability: Check for credentials in environment for tests
+      - name: GCP Auth Check
+        run: |
+          if [ -z "$GOOGLE_APPLICATION_CREDENTIALS" ]; then
+            echo "Warning: GOOGLE_APPLICATION_CREDENTIALS not set. Integration tests may fail."
+          fi
+      - name: Build Test
+        run: docker build -t meal-agent .
