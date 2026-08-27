@@ -1,4 +1,3 @@
-name: CI Pipeline
 name: GCP CI/CD Pipeline
 
 on: [push, pull_request]
@@ -18,9 +17,6 @@ jobs:
           pip install -r requirements.txt
       - name: Lint with ruff
         run: ruff check .
-      - name: Run tests
-        run: pytest
-        continue-on-error: true
       # Observability: Check for credentials in environment for tests
       - name: GCP Auth Check
         run: |

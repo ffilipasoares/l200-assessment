@@ -3,8 +3,8 @@ from agent import create_agent
 from langchain_core.messages import HumanMessage
 
 st.set_page_config(page_title="ChefGPT - Meal Planner", layout="centered")
-st.title("🥗 AI Meal Planner")
-st.caption("L200 Assessment Agent - Powered by LangGraph & Gemini")
+st.title("🥗 Vertex AI Meal Planner")
+st.caption("L200 Assessment Agent - Powered by LangGraph & Google Vertex AI")
 
 agent = create_agent()
 
@@ -12,7 +12,7 @@ agent = create_agent()
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-user_id = st.sidebar.text_input("User ID (for memory)", value="default_user")
+user_id = st.sidebar.text_input("GCP User Identity", value="default_user")
 config = {"configurable": {"thread_id": user_id}}
 
 # Display chat history
@@ -35,4 +35,4 @@ if prompt := st.chat_input("Ex: Plan a high-protein vegetarian week for me."):
             st.session_state.messages.append({"role": "assistant", "content": final_msg})
 
 st.sidebar.divider()
-st.sidebar.info("This agent uses persistent SQLite memory. It will remember your preferences across sessions for the same User ID.")
+st.sidebar.info("Running on Cloud Run. Memory persists via local SQLite checkpointer.")
