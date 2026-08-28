@@ -1,5 +1,19 @@
 steps:
-  # Build the agent container
+  # 1. Infrastructure as Code: Terraform
+  - name: 'hashicorp/terraform'
+    args: ['init']
+  - name: 'hashicorp/terraform'
+    args: ['apply', '-auto-approve']
+
+  # 2. Automated Evaluation Suite
+  - name: 'python:3.9'
+    entrypoint: python3
+    args: 
+      - '-m'
+      - 'pytest'
+      - 'l200-assessment/eval_agent.py'
+
+  # 3. Build & Deploy
   - name: 'gcr.io/cloud-builders/docker'
     args: ['build', '-t', 'gcr.io/$PROJECT_ID/meal-planner-agent', '.']
 

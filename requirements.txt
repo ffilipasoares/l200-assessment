@@ -1,0 +1,6 @@
+google-adk
+google-cloud-firestore
+google-cloud-logging
+opentelemetry-api
+opentelemetry-sdk
+pytest
