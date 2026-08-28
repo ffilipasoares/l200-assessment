@@ -1,11 +1,5 @@
 steps:
-  # 1. Infrastructure as Code: Terraform
-  - name: 'hashicorp/terraform'
-    args: ['init']
-  - name: 'hashicorp/terraform'
-    args: ['apply', '-auto-approve']
-
-  # 2. Automated Evaluation Suite
+  # 1. Automated Evaluation Suite (Fail fast if logic is broken)
   - name: 'python:3.9'
     entrypoint: python3
     args: 
@@ -13,21 +7,17 @@ steps:
       - 'pytest'
       - 'l200-assessment/eval_agent.py'
 
-  # 3. Build & Deploy
+  # 2. Containerization: Build and Push the Agent image
   - name: 'gcr.io/cloud-builders/docker'
-    args: ['build', '-t', 'gcr.io/$PROJECT_ID/meal-planner-agent', '.']
-
-  # Push to Container Registry
+    args: ['build', '-t', 'gcr.io/$PROJECT_ID/meal-planner-agent:latest', 'l200-assessment']
   - name: 'gcr.io/cloud-builders/docker'
-    args: ['push', 'gcr.io/$PROJECT_ID/meal-planner-agent']
+    args: ['push', 'gcr.io/$PROJECT_ID/meal-planner-agent:latest']
 
-  # Deploy to Cloud Run (Serverless infrastructure)
-  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
-    entrypoint: gcloud
-    args:
-      - 'run'
-      - 'deploy'
-      - 'meal-planner-service'
-      - '--image=gcr.io/$PROJECT_ID/meal-planner-agent'
-      - '--region=us-central1'
-      - '--platform=managed'
+  # 3. Infrastructure as Code: Provisioning & Declarative Deployment
+  # This replaces the imperative 'gcloud run deploy' command
+  - name: 'hashicorp/terraform'
+    dir: 'l200-assessment'
+    args: ['init']
+  - name: 'hashicorp/terraform'
+    dir: 'l200-assessment'
+    args: ['apply', '-auto-approve', '-var=project_id=$PROJECT_ID']
