@@ -1,0 +1,19 @@
+steps:
+  # Build the agent container
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['build', '-t', 'gcr.io/$PROJECT_ID/meal-planner-agent', '.']
+
+  # Push to Container Registry
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['push', 'gcr.io/$PROJECT_ID/meal-planner-agent']
+
+  # Deploy to Cloud Run (Serverless infrastructure)
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: gcloud
+    args:
+      - 'run'
+      - 'deploy'
+      - 'meal-planner-service'
+      - '--image=gcr.io/$PROJECT_ID/meal-planner-agent'
+      - '--region=us-central1'
+      - '--platform=managed'
