@@ -1,13 +1,13 @@
 import os
 import json
 import logging
-from typing import Optional, List, Dict
+import asyncio
+from typing import Optional, List, Dict, Any
 from pydantic import BaseModel, Field
 from google.adk.agents import Agent
 from google.adk.tools import google_search
 from google.cloud import firestore, secretmanager
 import google.cloud.logging
-from opentelemetry import trace, baggage
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor, ConsoleSpanExporter
 
@@ -19,12 +19,33 @@ provider.add_span_processor(processor)
 trace.set_tracer_provider(provider)
 tracer = trace.get_tracer(__name__)
 
-client = google.cloud.logging.Client()
-client.setup_logging()
-logger = logging.getLogger("meal_planner_agent")
+# Structured Logging: Using native library to handle JSON formatting
+log_client = google.cloud.logging.Client()
+log_client.setup_logging()
+logger = logging.getLogger("meal_planner")
+
+def fetch_config_from_secret_manager(secret_id: str) -> Dict[str, Any]:
+    """
+    Retrieves configuration secrets from Google Cloud Secret Manager.
+    
+    :param secret_id: The ID of the secret to fetch.
+    :return: A dictionary containing the secret configuration.
+    """
+    try:
+        client = secretmanager.SecretManagerServiceClient()
+        project_id = os.environ.get("GOOGLE_CLOUD_PROJECT")
+        name = f"projects/{project_id}/secrets/{secret_id}/versions/latest"
+        response = client.access_secret_version(request={"name": name})
+        return json.loads(response.payload.data.decode("UTF-8"))
+    except Exception as e:
+        logger.warning(f"Secret Manager fetch failed, falling back to defaults: {e}")
+        return {}
+
+# Secure configuration injection
+app_config = fetch_config_from_secret_manager("meal-planner-config")
 
 def redact_pii(text: str) -> str:
-    """Actively redacts email patterns from strings to protect PII."""
+    """Utility to redact emails. Robust guardrails are now handled by the Guardrail Specialist Agent."""
     import re
     email_pattern = r'[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+'
     return re.sub(email_pattern, "[REDACTED_EMAIL]", text)
@@ -41,22 +62,35 @@ class MealPlanEntry(BaseModel):
     meal_details: str = Field(..., description="Description of the meal and ingredients.")
     user_id: str = Field(default="default_user", description="The unique identifier for the user.")
 
+# --- Tool Implementation with Pydantic Signatures ---
 
-def get_pantry_inventory(user_id: str = "default_user") -> str:
+def get_pantry_inventory(query: InventoryQuery) -> str:
     """
     Retrieves the current items available in the user's pantry from Firestore.
     
-    :param user_id: The unique identifier for the user.
-    :return: A JSON string containing 'status', and 'data' (list of items) or 'error'.
+    :param query: An InventoryQuery object containing the user_id.
+    :return: A JSON string containing 'status' and 'data' (list of items) or an error message with recovery hints.
     """
+    user_id = query.user_id
     with tracer.start_as_current_span("get_pantry_inventory") as span:
         span.set_attribute("user.id", user_id)
+        
+        # Logging: Explicit Intent
+        logger.info("Intent: Fetch pantry inventory", extra={"user_id": user_id, "stage": "pre-execution"})
+        
         try:
             doc_ref = db.collection("pantries").document(user_id)
             doc = doc_ref.get()
             if doc.exists:
+                inventory = doc.to_dict().get("items", [])
                 res = {"status": "success", "data": inventory}
-                logger.info(redact_pii(f"Inventory fetched for {user_id}: {inventory}"))
+                
+                # Logging: Explicit Outcome
+                logger.info("Outcome: Inventory fetched", extra={
+                    "user_id": user_id, 
+                    "item_count": len(inventory), 
+                    "stage": "post-execution"
+                })
                 return json.dumps(res)
             return json.dumps({
                 "status": "error", 
@@ -68,32 +102,50 @@ def get_pantry_inventory(user_id: str = "default_user") -> str:
             return json.dumps({"status": "failure", "error": str(e), "recovery_hint": "Retry the request in 30 seconds."})
 
                 
-
-def save_meal_plan(day: str, meal_details: str, user_id: str = "default_user") -> str:
+def save_meal_plan(entry: MealPlanEntry) -> str:
     """
     Persists a meal plan for a specific day of the week to Firestore.
     
-    :param day: The day of the week to save the plan for.
-    :param meal_details: The meal description.
-    :param user_id: The unique identifier for the user.
-    :return: A JSON string confirmation or error with recovery instructions.
+    :param entry: A MealPlanEntry object containing day, meal_details, and user_id.
+    :return: A JSON string confirmation or an error with recovery instructions.
     """
     with tracer.start_as_current_span("save_meal_plan"):
+        # Logging: Explicit Intent
+        logger.info("Intent: Save meal plan", extra={"day": entry.day, "user_id": entry.user_id, "stage": "pre-execution"})
+        
         try:
-            if not day or not meal_details:
-                return json.dumps({
-                    "status": "error", 
-                    "message": "Missing required fields.",
-                    "recovery_hint": "Please provide both 'day' and 'meal_details'."
-                })
+            doc_ref = db.collection("plans").document(entry.user_id)
+            doc_ref.set({entry.day: entry.meal_details}, merge=True)
             
-            doc_ref = db.collection("plans").document(user_id)
-            doc_ref.set({day: meal_details}, merge=True)
-            
-            logger.info(json.dumps({"intent": "save_meal", "outcome": "success", "day": redact_pii(day)}))
-            return json.dumps({"status": "success", "message": f"Saved {meal_details} for {day}."})
+            # Logging: Explicit Outcome
+            logger.info("Outcome: Meal plan saved", extra={"day": entry.day, "status": "success", "stage": "post-execution"})
+            return json.dumps({"status": "success", "message": f"Saved {entry.meal_details} for {entry.day}."})
         except Exception as e:
+            logger.error(f"Failed to save meal plan: {e}")
             return json.dumps({"status": "error", "message": str(e), "recovery_hint": "Check Firestore permissions."})
+
+
+async def archive_session_background(user_id: str, plan_summary: str):
+    """
+    Asynchronous background memory operation to archive session summaries.
+    """
+    await asyncio.sleep(0.1) # Simulate async IO
+    logger.info(f"Background archival started for user {user_id}")
+    db.collection("archives").document(user_id).collection("history").add({
+        "summary": plan_summary,
+        "timestamp": firestore.SERVER_TIMESTAMP
+    })
+
+def archive_memory(user_id: str, plan_summary: str) -> str:
+    """
+    Triggers a background archival of the current session state.
+    
+    :param user_id: The unique identifier for the user.
+    :param plan_summary: A summary of the plan to archive.
+    """
+    # Management of context bloat: ARCHIVE AND PRUNE
+    asyncio.create_task(archive_session_background(user_id, plan_summary))
+    return "Archival task scheduled in the background."
 
 
 def request_human_approval(proposal: str) -> str:
@@ -101,10 +153,17 @@ def request_human_approval(proposal: str) -> str:
     Human-in-the-loop: Pauses for user confirmation on critical meal changes.
     
     :param proposal: The meal plan proposal requiring approval.
-
     """
     # In a real ADK implementation, this might trigger a pub/sub event or a UI prompt.
     return "PENDING_APPROVAL: Please confirm if this proposal meets your needs."
+
+# --- Orchestration: Guardrail Specialist ---
+guardrail_agent = Agent(
+    name="guardrail_specialist",
+    model="gemini-1.5-flash",
+    description="Validates that no sensitive PII is leaked and ensures nutrition safety.",
+    instruction="Review the plan. Redact phone numbers or addresses. Ensure recipes are safe and healthy."
+)
 
 # --- Orchestration & Logic: Multi-Agent Pattern ---
 
@@ -136,11 +195,14 @@ meal_planner_agent = Agent(
     1. Delegate to 'inventory_manager' to see what is available.
     2. Delegate to 'nutritionist' to find recipes based on inventory.
     3. Call 'request_human_approval' before saving.
-    4. Use 'save_meal_plan' to finalize.
+    4. Before final output, delegate to 'guardrail_specialist' to sanitize PII.
+    5. Use 'save_meal_plan' to finalize.
     
-    CONTEXT MANAGEMENT:
-    - Maintain a concise history. If the conversation exceeds 5 turns, summarize the current plan and pantry state, then clear old history to avoid 503 errors.
+    BLOAT MANAGEMENT:
+    - If the conversation exceeds 5 turns, use 'archive_memory' to save state, 
+      then provide a concise summary and proceed with a fresh mental model 
+      to avoid 503/413 errors.
     """,
-    tools=[save_meal_plan, request_human_approval],
-    agents=[inventory_agent, nutritionist_agent] # Multi-agent composition
+    tools=[save_meal_plan, request_human_approval, archive_memory],
+    agents=[inventory_agent, nutritionist_agent, guardrail_agent] # Multi-agent composition
 )
